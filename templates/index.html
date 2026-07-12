@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solaria Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socketio/4.0.1/socketio.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f6f9; margin: 20px; }
+        h1 { color: #333; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border-left: 5px solid #6c757d; }
+        .card.Online { border-left-color: #28a745; }
+        .card.needs-help { border-left-color: #dc3545; background-color: #fff5f5; }
+        .status-badge { padding: 3px 8px; border-radius: 4px; font-size: 12px; color: white; }
+        .bg-online { background-color: #28a745; }
+        .bg-offline { background-color: #6c757d; }
+        .btn { background: #007bff; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
+        .btn-danger { background: #dc3545; }
+    </style>
+</head>
+<body>
+    <h1>Solaria Central Management</h1>
+    <p>Total Flashed Boards Inventory</p>
+    <hr>
+    <div class="grid" id="tables-grid"></div>
+
+    <script>
+        const socket = io();
+        const grid = document.getElementById('tables-grid');
+
+        socket.on('update_dashboard', (boards) => {
+            grid.innerHTML = '';
+            for (const [tableId, info] of Object.entries(boards)) {
+                const card = document.createElement('div');
+                const isOnline = info.status === 'Online';
+                card.className = `card ${info.status} ${info.assistance ? 'needs-help' : ''}`;
+                
+                let ordersList = info.orders ? info.orders.map(item => `<li>${item}</li>`).join('') : '';
+                
+                card.innerHTML = `
+                    <h3>${tableId}</h3>
+                    <p>Status: <span class="status-badge ${isOnline ? 'bg-online' : 'bg-offline'}">${info.status}</span></p>
+                    <p>Assistance: <strong>${info.assistance ? '⚠️ NEEDS HELP' : 'Clear'}</strong></p>
+                    ${info.assistance ? `<button class="btn btn-danger" onclick="clearHelp('${tableId}')">Resolve</button>` : ''}
+                    <h4>Current Orders:</h4>
+                    <ul>${ordersList || '<li>No active orders</li>'}</ul>
+                `;
+                grid.appendChild(card);
+            }
+        });
+
+        function clearHelp(tableId) {
+            socket.emit('clear_assistance', { table_id: tableId });
+        }
+    </script>
+</body>
+</html>
