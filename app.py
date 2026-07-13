@@ -10,48 +10,47 @@ from typing import Dict, Any
 
 app = Flask(__name__)
 
-# Core state and thread synchronization
+# Thread-safe storage for active tables, logs, and flasher signals
 data_lock = threading.Lock()
 tables_status: Dict[str, Dict[str, Any]] = {}
 flash_log = "No board connected yet."
 
-# Configuration paths for USB auto-flashing
+# --- SYSTEM MANAGEMENT CONFIGURATION ---
 PICO_TEMPLATE_DIR = os.path.expanduser("~/solaria/pico_template")
-MNT_TARGET = "/media/pi/RPI-RP2"  # Default mount path for Raspberry Pi OS
+MNT_TARGET = "/media/pi/RPI-RP2"  # Change 'pi' to your system username if different
 
 def flash_connected_pico() -> None:
-    """Monitors USB subsystem for raw Pico 2W boards and flashes them sequentially."""
+    """Monitors USB slots for a Pico 2W in BOOTSEL mode and flashes it sequentially."""
     global flash_log
     while True:
         if os.path.exists(MNT_TARGET):
-            flash_log = "⚡ Pico detected! Injecting custom profile..."
+            flash_log = "⚡ Pico detected! Injecting restaurant profile..."
             try:
-                # 1. Determine next table ID sequentially
+                # 1. Dynamically calculate the next structural table ID
                 with data_lock:
                     next_num = len(tables_status) + 1
                     assigned_id = f"Table_{next_num}"
                 
-                # 2. Copy the boilerplate startup sequence
+                # 2. Deploy the core connection handshake file
                 shutil.copy(os.path.join(PICO_TEMPLATE_DIR, "boot.py"), MNT_TARGET)
                 
-                # 3. Read and modify the runtime template dynamically
+                # 3. Read, rewrite, and tailor the primary script for this specific table
                 with open(os.path.join(PICO_TEMPLATE_DIR, "main.py"), "r") as f:
                     main_code = f.read()
                 
-                # Replace the generic variable with the concrete assigned number
+                # Dynamically alter the table layout assignment inside the code text
                 modified_code = main_code.replace('TABLE_ID = "Table_1"', f'TABLE_ID = "{assigned_id}"')
                 
-                # Write the customized code to the device root
                 with open(os.path.join(MNT_TARGET, "main.py"), "w") as f:
                     f.write(modified_code)
                 
                 flash_log = f"✅ Flashed successfully as {assigned_id}! Safe to unplug."
                 
-                # Log the unit instantly in the terminal panel index
+                # Instantly track the newborn node on the active screen
                 with data_lock:
                     tables_status[assigned_id] = {"status": "Flashed / Offline", "assistance": False, "orders": []}
                 
-                # Cooldown period to give user time to unplug the device
+                # Cooldown delay to prevent looping execution errors on the same device
                 time.sleep(10)
             except Exception as e:
                 flash_log = f"❌ Flash failure: {str(e)}"
@@ -61,36 +60,36 @@ def flash_connected_pico() -> None:
         time.sleep(2)
 
 def update_terminal(stdscr) -> None:
-    """Renders the custom system interface in the terminal emulator window."""
+    """Renders the text dashboard natively on the local terminal screen."""
     curses.curs_set(0)
     stdscr.clear()
 
     while True:
         stdscr.erase()
         
-        # Frame Layout Header
+        # Draw Dashboard Frame Headers
         stdscr.addstr(0, 0, "==========================================================", curses.A_BOLD)
         stdscr.addstr(1, 0, "                SOLARIA TERMINAL DASHBOARD                ", curses.A_BOLD)
-        stdscr.addstr(2, 0, f" Status: Active | Clock Check: {datetime.now().strftime('%H:%M:%S')}")
+        stdscr.addstr(2, 0, f" Status: Active | Clock: {datetime.now().strftime('%H:%M:%S')}")
         stdscr.addstr(3, 0, "==========================================================", curses.A_BOLD)
         
-        # Hardware Integration Block
+        # Hardware Deployment Window
         stdscr.addstr(5, 0, "--- Hardware Flasher Link ---", curses.A_UNDERLINE)
         stdscr.addstr(6, 2, flash_log)
         stdscr.addstr(7, 0, "-----------------------------")
 
-        # Live Network Nodes Index
+        # Dynamic Endpoint Array Render Loop
         row = 9
         with data_lock:
             if not tables_status:
-                stdscr.addstr(row, 2, "Waiting for Pico endpoints to establish handshake...", curses.A_BLINK)
+                stdscr.addstr(row, 2, "Waiting for hardware endpoints to check-in over network...", curses.A_BLINK)
             else:
                 for table_id, info in tables_status.items():
                     status = info.get('status', 'Offline')
                     help_str = "⚠️  NEEDS HELP" if info.get('assistance') else "Clear"
                     orders = ", ".join(info.get('orders', [])) or "None"
                     
-                    # Inverse video styling context if table signals for support
+                    # Inverse terminal styling context if table throws emergency flag
                     attr = curses.A_REVERSE if info.get('assistance') else curses.A_NORMAL
                     
                     stdscr.addstr(row, 2, f"[{table_id}]", curses.A_BOLD | attr)
@@ -102,7 +101,7 @@ def update_terminal(stdscr) -> None:
         stdscr.refresh()
         time.sleep(0.5)
 
-# --- REST ENDPOINTS FOR PICOS ---
+# --- INCOMING NETWORK HANDSHAKE ROUTING ---
 @app.route('/register_table', methods=['POST'])
 def register() -> Any:
     data = request.json or {}
@@ -143,17 +142,17 @@ def order() -> Any:
 def run_flask():
     import logging
     log = logging.getLogger('werkzeug')
-    log.setLevel(logging.ERROR)  # Prevent server console dumps from corrupting UI text
+    log.setLevel(logging.ERROR)  # Suppress printing incoming request garbage onto terminal window
     app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
 
 if __name__ == '__main__':
-    # Thread 1: Spin up REST routing listening matrix
+    # Thread 1: Spin up incoming background communication routes
     api_thread = threading.Thread(target=run_flask, daemon=True)
     api_thread.start()
     
-    # Thread 2: Start background file watcher for hardware link
+    # Thread 2: Run automated flash directory lookups
     flasher_thread = threading.Thread(target=flash_connected_pico, daemon=True)
     flasher_thread.start()
     
-    # Main Thread: Execute Curses terminal wrapper dashboard layout
+    # Main Thread: Bind the window execution framework
     curses.wrapper(update_terminal)
