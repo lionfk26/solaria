@@ -23,3 +23,4 @@ def connect_wifi():
         print("Wi-Fi connection failed.")
 
 connect_wifi()
+
