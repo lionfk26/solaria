@@ -31,20 +31,35 @@ def flash_connected_pico() -> None:
                     next_num = len(tables_status) + 1
                     assigned_id = f"Table_{next_num}"
                 
-                # 2. Deploy the core connection handshake file
-                shutil.copy(os.path.join(PICO_TEMPLATE_DIR, "boot.py"), MNT_TARGET)
+                # --- INJECT WI-FI CREDENTIALS INTO BOOT.PY ---
+                try:
+                    with open("wifi_config.json", "r") as wf:
+                        wifi_data = json.load(wf)
+                        ssid = wifi_data.get("ssid", "")
+                        pwd = wifi_data.get("password", "")
+                except FileNotFoundError:
+                    ssid = "Your_Restaurant_WiFi"
+                    pwd = "Your_WiFi_Password"
+
+                with open(os.path.join(PICO_TEMPLATE_DIR, "boot.py"), "r") as f:
+                    boot_code = f.read()
                 
-                # 3. Read, rewrite, and tailor the primary script for this specific table
+                boot_code = boot_code.replace('WIFI_SSID = "Your_Restaurant_WiFi"', f'WIFI_SSID = "{ssid}"')
+                boot_code = boot_code.replace('WIFI_PASSWORD = "Your_WiFi_Password"', f'WIFI_PASSWORD = "{pwd}"')
+                
+                with open(os.path.join(MNT_TARGET, "boot.py"), "w") as f:
+                    f.write(boot_code)
+                
+                # --- INJECT TABLE ID INTO MAIN.PY ---
                 with open(os.path.join(PICO_TEMPLATE_DIR, "main.py"), "r") as f:
                     main_code = f.read()
                 
-                # Dynamically alter the table layout assignment inside the code text
                 modified_code = main_code.replace('TABLE_ID = "Table_1"', f'TABLE_ID = "{assigned_id}"')
                 
                 with open(os.path.join(MNT_TARGET, "main.py"), "w") as f:
                     f.write(modified_code)
                 
-                flash_log = f"✅ Flashed successfully as {assigned_id}! Safe to unplug."
+                flash_log = f"✅ Flashed {assigned_id} with Wi-Fi! Safe to unplug."
                 
                 # Instantly track the newborn node on the active screen
                 with data_lock:
