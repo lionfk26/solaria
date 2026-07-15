@@ -27,7 +27,7 @@ audio_out = I2S(1,
                 mode=I2S.TX, 
                 bits=16, 
                 format=I2S.MONO, 
-                rate=22050,  # <-- Matches Northern English model speed perfectly!
+                rate=22050,  # Matches Piper Northern English model speed perfectly!
                 ibuf=40000)
 
 def register():
