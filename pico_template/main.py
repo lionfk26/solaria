@@ -1,59 +1,73 @@
 import urequests
 import time
 import ujson
-from machine import Pin
+from machine import Pin, I2S
 
 # --- CORE SETTINGS ---
 TABLE_ID = "Table_1"
-SERVER_URL = "http://192.168.1.100:5000"  # Replace with your actual Pi 4B IP address
+# The Pi will automatically replace <SERVER_IP> with its dynamic local IP on flash
+SERVER_URL = "http://<SERVER_IP>:5000"  
 
 # --- HARDWARE SETUP ---
-# Initialize the touch sensor on GPIO 15 as an input
+# TTP223 capacitive touch sensor on GP15
 touch_sensor = Pin(15, Pin.IN)
 
-def send_event(event_type: str, payload: dict) -> bool:
-    """Sends structured data payloads to the main Solaria hub."""
-    url = f"{SERVER_URL}/{event_type}"
-    headers = {'content-type': 'application/json'}
-    data = ujson.dumps(payload)
-    
+# INMP441 Microphone on I2S Bus 0 (Configured for 16kHz raw capture)
+audio_in = I2S(0, 
+               sck=Pin(16), ws=Pin(17), sd=Pin(18), 
+               mode=I2S.RX, 
+               bits=16, 
+               format=I2S.MONO, 
+               rate=16000, 
+               ibuf=40000)
+
+# MAX98357A I2S Amplifier on I2S Bus 1 (Configured for 22,050Hz for Piper voice)
+audio_out = I2S(1, 
+                sck=Pin(20), ws=Pin(21), sd=Pin(22), 
+                mode=I2S.TX, 
+                bits=16, 
+                format=I2S.MONO, 
+                rate=22050,  # <-- Matches Northern English model speed perfectly!
+                ibuf=40000)
+
+def register():
+    """Tells the main server that this client has booted up on the network."""
     try:
-        response = urequests.post(url, data=data, headers=headers)
-        response.close()
-        return True
-    except Exception as e:
-        print("Network connection trace failure:", e)
-        return False
+        urequests.post(f"{SERVER_URL}/register_table", json={"table_id": TABLE_ID}).close()
+    except Exception:
+        pass
 
-# Self-register with server upon power-up initialization
-send_event("register_table", {"table_id": TABLE_ID})
+register()
+print(f"[{TABLE_ID}] Ready. Tap touch sensor on GP15 to speak.")
 
-print(f"[{TABLE_ID}] Ready. Monitoring touch sensor on GP15.")
-
-# Track the current state to prevent spamming the server
-assistance_active = False
-
-while True:
-    # touch_sensor.value() returns 1 when touched, 0 when not touched
-    current_touch_state = touch_sensor.value()
+def record_and_send():
+    """Records 3 seconds of customer audio and plays the AI vocal reply."""
+    print("Recording mic stream...")
+    record_time = 3 
+    bytes_to_read = 16000 * 2 * record_time
+    mic_buffer = bytearray(bytes_to_read)
     
-    # If the sensor is touched AND we haven't already called for help
-    if current_touch_state == 1 and not assistance_active:
-        print(f"[{TABLE_ID}] Touch detected! Requesting assistance...")
+    # Read the data from physical microphone
+    audio_in.readinto(mic_buffer)
+    print("Uploading recording to Solaria server...")
+    
+    headers = {'Content-Type': 'application/octet-stream', 'Table-ID': TABLE_ID}
+    try:
+        response = urequests.post(f"{SERVER_URL}/voice_command", data=mic_buffer, headers=headers)
+        reply_audio = response.content
+        response.close()
         
-        # Send the alert to the Solaria terminal dashboard
-        success = send_event("request_assistance", {"table_id": TABLE_ID, "needs_help": True})
-        
-        if success:
-            assistance_active = True
-            
-        # 2-second cooldown so a lingering finger doesn't trigger multiple times
-        time.sleep(2) 
-        
-    # Optional Reset Logic: 
-    # If you want the customer to be able to "cancel" the call by touching it again,
-    # you can listen for another touch event here to send "needs_help": False.
-    # For now, we will leave it so the manager clears it from the central dashboard.
+        if reply_audio:
+            print("Playing local AI voice output...")
+            # Stream directly to speaker at 22,050 Hz
+            audio_out.write(reply_audio)
+    except Exception as e:
+        print("Communications failure:", e)
 
-    # A tiny sleep to prevent the while loop from maxing out the Pico's processor
+# --- RUNTIME CODE ---
+while True:
+    if touch_sensor.value() == 1:
+        record_and_send()
+        time.sleep(2)  # Cooldown prevents accidental multi-triggering
+        
     time.sleep(0.1)
