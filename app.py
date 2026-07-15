@@ -3,10 +3,11 @@ import curses
 import threading
 import json
 import os
-import shutil
 import time
+import socket
 import subprocess
 from datetime import datetime
+from collections import Counter
 from typing import Dict, Any
 from vosk import Model, KaldiRecognizer
 
@@ -27,6 +28,29 @@ VOSK_MODEL_PATH = "models/vosk/vosk-model-small-en-us-0.15"
 PIPER_EXEC = "models/piper/piper"
 PIPER_MODEL = "models/piper/en_GB-northern_english_male-medium.onnx"
 
+# --- MENU DATABASE LOADING ---
+MENU_FILE = "menu.json"
+menu_items = []
+
+if os.path.exists(MENU_FILE):
+    try:
+        with open(MENU_FILE, "r") as mf:
+            menu_data = json.load(mf)
+            for menu_type, categories in menu_data.get("menus", {}).items():
+                for category, items in categories.items():
+                    for item in items:
+                        menu_items.append({
+                            "name": item["name"],
+                            "clean_name": item["name"].lower().replace("&", "and").replace("-", " "),
+                            "price": item.get("price") or item.get("base_price", 0.0)
+                        })
+        # Sort by length of the clean name descending. 
+        # This ensures we match "cheesy chips" before accidentally matching just "chips".
+        menu_items.sort(key=lambda x: len(x["clean_name"]), reverse=True)
+        print(f"Loaded {len(menu_items)} dynamic menu items successfully.")
+    except Exception as e:
+        print(f"Error reading menu.json database: {e}")
+
 # Initialize Local Speech Recognition
 if os.path.exists(VOSK_MODEL_PATH):
     try:
@@ -39,19 +63,30 @@ else:
     speech_model = None
     ai_log = "Warning: Vosk model folder not found in models/vosk/"
 
+def get_local_ip() -> str:
+    """Helper to detect the active local IP address of this Raspberry Pi."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = '127.0.0.1'
+    finally:
+        s.close()
+    return ip
+
 def flash_connected_pico() -> None:
-    """Monitors USB subsystem for raw Pico 2W boards and flashes them sequentially."""
+    """Monitors USB subsystem for raw Pico 2W boards, detects local network settings, and auto-flashes."""
     global flash_log
     while True:
         if os.path.exists(MNT_TARGET):
             flash_log = "⚡ Pico detected! Injecting custom profile..."
             try:
-                # 1. Determine next table ID sequentially
                 with data_lock:
                     next_num = len(tables_status) + 1
                     assigned_id = f"Table_{next_num}"
                 
-                # Fetch Wi-Fi settings dynamically
+                server_ip = get_local_ip()
                 ssid, pwd = "Your_Restaurant_WiFi", "Your_WiFi_Password"
                 if os.path.exists("wifi_config.json"):
                     with open("wifi_config.json", "r") as wf:
@@ -59,29 +94,24 @@ def flash_connected_pico() -> None:
                         ssid = wifi_data.get("ssid", ssid)
                         pwd = wifi_data.get("password", pwd)
 
-                # Edit and write boot.py
                 with open(os.path.join(PICO_TEMPLATE_DIR, "boot.py"), "r") as f:
                     boot_code = f.read()
                 boot_code = boot_code.replace('WIFI_SSID = "Your_Restaurant_WiFi"', f'WIFI_SSID = "{ssid}"')
                 boot_code = boot_code.replace('WIFI_PASSWORD = "Your_WiFi_Password"', f'WIFI_PASSWORD = "{pwd}"')
-                
                 with open(os.path.join(MNT_TARGET, "boot.py"), "w") as f:
                     f.write(boot_code)
                 
-                # Edit and write main.py
                 with open(os.path.join(PICO_TEMPLATE_DIR, "main.py"), "r") as f:
                     main_code = f.read()
                 modified_code = main_code.replace('TABLE_ID = "Table_1"', f'TABLE_ID = "{assigned_id}"')
-                
+                modified_code = modified_code.replace('SERVER_URL = "http://<SERVER_IP>:5000"', f'SERVER_URL = "http://{server_ip}:5000"')
                 with open(os.path.join(MNT_TARGET, "main.py"), "w") as f:
                     f.write(modified_code)
                 
-                flash_log = f"✅ Flashed successfully as {assigned_id}! Safe to unplug."
+                flash_log = f"✅ Flashed successfully as {assigned_id}! Server IP set to {server_ip}."
                 
                 with data_lock:
                     tables_status[assigned_id] = {"status": "Flashed / Offline", "assistance": False, "orders": []}
-                
-                # Cooldown to avoid double flashing
                 time.sleep(10)
             except Exception as e:
                 flash_log = f"❌ Flash failure: {str(e)}"
@@ -143,35 +173,72 @@ def register() -> Any:
 
 @app.route('/voice_command', methods=['POST'])
 def handle_voice():
-    """Receives 16kHz PCM audio from table unit, transcribes it, and responds with 22.05kHz Piper voice."""
+    """Receives 16kHz PCM audio, transcribes, dynamically matches items, and explicitly confirms them aloud."""
     table_id = request.headers.get('Table-ID', 'Unknown')
     raw_audio = request.data  # Raw 16-bit 16000Hz PCM
     
     if not speech_model:
         return "Speech Model Offline", 500
 
-    # 1. Transcribe audio with Vosk
+    # 1. Transcribe audio using Vosk
     rec = KaldiRecognizer(speech_model, 16000)
     rec.AcceptWaveform(raw_audio)
     result = json.loads(rec.Result())
-    spoken_text = result.get("text", "")
+    spoken_text = result.get("text", "").lower()
     
-    # 2. Local natural-language checking
+    # Clean up transcript slightly for easier matching
+    spoken_text = spoken_text.replace("and", " ").replace("please", "")
+
+    # Default fall-back response
     reply_text = "I didn't quite catch that, mate. Could you say it again?"
-    if "help" in spoken_text or "manager" in spoken_text:
+    matched_items = []
+
+    # 2. Advanced Dynamic JSON Search logic
+    if "help" in spoken_text or "manager" in spoken_text or "assistance" in spoken_text:
         with data_lock:
             if table_id in tables_status:
                 tables_status[table_id]['assistance'] = True
         reply_text = "No worries, I've called a manager over to your table."
-    elif "water" in spoken_text:
-        reply_text = "Alright, I'll send someone over with some water for you."
-        with data_lock:
-            if table_id in tables_status:
-                tables_status[table_id]['orders'].append("Water")
+    else:
+        # Loop through our loaded JSON items to match words
+        remaining_text = spoken_text
+        for item in menu_items:
+            # Check if the customer said the item name. 
+            # We remove it from remaining_text to avoid double-matching sub-words
+            if item["clean_name"] in remaining_text:
+                matched_items.append(item)
+                remaining_text = remaining_text.replace(item["clean_name"], "")
+                
+        if matched_items:
+            # Add to the dashboard tracker
+            with data_lock:
+                if table_id in tables_status:
+                    for item in matched_items:
+                        tables_status[table_id]['orders'].append(f"{item['name']} (£{item['price']:.2f})")
+            
+            # --- EXPLICIT ORDER CONFIRMATION LOGIC ---
+            # Count duplicates to make the voice sound natural
+            item_counts = Counter([i['name'] for i in matched_items])
+            spoken_list = []
+            
+            for name, count in item_counts.items():
+                if count > 1:
+                    spoken_list.append(f"{count} orders of {name}")
+                else:
+                    spoken_list.append(name)
+            
+            # Format the list grammatically
+            if len(spoken_list) == 1:
+                formatted_items = spoken_list[0]
+            elif len(spoken_list) == 2:
+                formatted_items = f"{spoken_list[0]} and {spoken_list[1]}"
+            else:
+                formatted_items = ", ".join(spoken_list[:-1]) + ", and " + spoken_list[-1]
+                
+            reply_text = f"Got it! I have added {formatted_items} to your table's order. Let me know if you need anything else."
 
-    # 3. Generate Speech output with Piper (outputs raw mono PCM directly)
+    # 3. Generate Speech via Piper (1GB RAM optimized subprocess)
     out_file = f"/tmp/response_{table_id}.raw"
-    # Execute the ARM64 binary with the Northern English voice model
     piper_cmd = f"echo '{reply_text}' | {PIPER_EXEC} --model {PIPER_MODEL} --output_raw > {out_file}"
     subprocess.run(piper_cmd, shell=True)
 
