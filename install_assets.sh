@@ -30,3 +30,4 @@ chmod +x piper
 
 cd ../..
 echo "✅ All offline assets installed and ready!"
+
