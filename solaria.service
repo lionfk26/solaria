@@ -1,0 +1,14 @@
+[Unit]
+Description=Solaria Local AI Server
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/solaria
+ExecStart=/home/pi/solaria/venv/bin/python3 app.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
