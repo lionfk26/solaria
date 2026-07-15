@@ -12,6 +12,7 @@ def connect_wifi():
         print("Connecting to Wi-Fi...")
         wlan.connect(WIFI_SSID, WIFI_PASSWORD)
         
+        # 15-second connection timeout guard
         timeout = 0
         while not wlan.isconnected() and timeout < 15:
             time.sleep(1)
@@ -23,4 +24,3 @@ def connect_wifi():
         print("Wi-Fi connection failed.")
 
 connect_wifi()
-
