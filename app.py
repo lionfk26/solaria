@@ -44,16 +44,16 @@ if os.path.exists(MENU_FILE):
                             "clean_name": item["name"].lower().replace("&", "and").replace("-", " "),
                             "price": item.get("price") or item.get("base_price", 0.0)
                         })
-        # Sort long names first to maximize phrase matching accuracy
+        # Sort by length descending to match longest phrases first (e.g., "Cheesy Garlic Bread" before "Garlic Bread")
         menu_items.sort(key=lambda x: len(x["clean_name"]), reverse=True)
     except Exception:
         pass
 
-# Initialize Vosk Model
+# --- AI ENGINE INITIALIZATION ---
 if os.path.exists(VOSK_MODEL_PATH):
     try:
         speech_model = Model(VOSK_MODEL_PATH)
-        ai_log = "AI Engine Ready (Vosk TCP Stream Active & Piper Northern Male Connected)"
+        ai_log = "AI Engine Ready (Vosk TCP & Piper Active)"
     except Exception as e:
         speech_model = None
         ai_log = f"Vosk Init Error: {str(e)}"
@@ -62,6 +62,7 @@ else:
     ai_log = f"Error: Vosk model missing at {VOSK_MODEL_PATH}"
 
 def get_local_ip() -> str:
+    """Fetch the active local IP address on the pub network."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(('8.8.8.8', 80))
@@ -73,66 +74,63 @@ def get_local_ip() -> str:
     return ip
 
 def flash_connected_pico() -> None:
-    """Background monitor thread that automatically configures and flashes connected Pico 2W boards."""
+    """Background thread that detects raw Pico 2W boards and flashes them with table credentials."""
     global flash_log
     while True:
         if os.path.exists(MNT_TARGET):
-            flash_log = "⚡ Pico 2W Mass Storage detected! Compiling dynamic firmware..."
+            flash_log = "⚡ Pico 2W detected! Compiling firmware..."
             time.sleep(1)
             
             local_ip = get_local_ip()
-            wifi_ssid = "Your_Restaurant_WiFi"
-            wifi_pass = "Your_WiFi_Password"
+            wifi_ssid, wifi_pass = "Your_Restaurant_WiFi", "Your_WiFi_Password"
             
-            # Safe parsing from config if available
+            # Extract actual Wi-Fi credentials if available
             if os.path.exists("wifi_config.json"):
                 try:
                     with open("wifi_config.json", "r") as wf:
                         wconf = json.load(wf)
-                        wifi_ssid = wconf.get("ssid", wifi_ssid)
-                        wifi_pass = wconf.get("password", wifi_pass)
+                        wifi_ssid, wifi_pass = wconf.get("ssid", wifi_ssid), wconf.get("password", wifi_pass)
                 except Exception:
                     pass
 
             try:
-                # 1. Read templates
+                # Read template files
                 with open(os.path.join(PICO_TEMPLATE_DIR, "boot.py"), "r") as f:
                     boot_code = f.read()
                 with open(os.path.join(PICO_TEMPLATE_DIR, "main.py"), "r") as f:
                     main_code = f.read()
 
-                # 2. Inject environment configurations
+                # Inject dynamic network variables
                 boot_code = boot_code.replace('WIFI_SSID = "Your_Restaurant_WiFi"', f'WIFI_SSID = "{wifi_ssid}"')
                 boot_code = boot_code.replace('WIFI_PASSWORD = "Your_WiFi_Password"', f'WIFI_PASSWORD = "{wifi_pass}"')
                 main_code = main_code.replace('SERVER_IP = "<SERVER_IP>"', f'SERVER_IP = "{local_ip}"')
 
-                # Assign automatic table identifier based on existing pool
+                # Assign incremental table ID
                 with data_lock:
                     next_id = len(tables_status) + 1
                 assigned_id = f"Table_{next_id}"
                 main_code = main_code.replace('TABLE_ID = "Table_1"', f'TABLE_ID = "{assigned_id}"')
 
-                # 3. Write compiled scripts to active mass storage
+                # Flash files to device
                 with open(os.path.join(MNT_TARGET, "boot.py"), "w") as f:
                     f.write(boot_code)
                 with open(os.path.join(MNT_TARGET, "main.py"), "w") as f:
                     f.write(main_code)
 
-                flash_log = f"✅ Flashing Complete! Disconnected board provisioned safely as: {assigned_id}"
-                
-                # Force Linux filesystem sync and unmount
-                subprocess.run(f"sync {MNT_TARGET}", shell=True)
+                flash_log = f"✅ Flashed successfully: {assigned_id}"
+                # Sync filesystem safely
+                subprocess.run(["sync"], timeout=10)
             except Exception as e:
-                flash_log = f"❌ Error flashing Pico 2W: {str(e)}"
+                flash_log = f"❌ Error flashing: {str(e)}"
             
-            # Cooldown to allow safe detachment of the device
+            # Cooldown to prevent multiple flashes on the same physical connection
             time.sleep(5)
         else:
-            flash_log = "Awaiting Pico 2W connections... (Hold BOOTSEL while inserting USB)"
+            flash_log = "Awaiting Pico 2W connections..."
             time.sleep(2)
 
 def update_terminal(stdscr) -> None:
-    """Curses terminal visualization engine mapping live threads and tables status."""
+    """Curses interface for the central command dashboard."""
     curses.curs_set(0)
     stdscr.nodelay(True)
     stdscr.timeout(500)
@@ -141,52 +139,51 @@ def update_terminal(stdscr) -> None:
         stdscr.clear()
         h, w = stdscr.getmaxyx()
         
-        # Border decorations
+        # Dashboard Header
         stdscr.attron(curses.A_BOLD)
         stdscr.addstr(0, 2, " SOLARIA TERMINAL DASHBOARD - ACTIVE - PI 5 POWERED ")
         stdscr.attroff(curses.A_BOLD)
         stdscr.addstr(0, w - 25, f"Clock: {datetime.now().strftime('%H:%M:%S')}")
         
-        # Draw Panels
+        # System status block
         stdscr.addstr(2, 2, "==================== SYSTEM & HARDWARE LINK ====================")
-        stdscr.addstr(3, 2, f"[STATUS]     Server IP: {get_local_ip()} | Listening Ports: 5000 (HTTP) & 5001 (TCP)")
+        stdscr.addstr(3, 2, f"[STATUS]     Server IP: {get_local_ip()} | Listening Ports: 5000 & 5001")
         stdscr.addstr(4, 2, f"[AUTO-FLASH] {flash_log}")
         stdscr.addstr(5, 2, f"[AI ENGINES] {ai_log}")
         stdscr.addstr(6, 2, "================================================================")
         
+        # Dynamic active table rendering
         stdscr.addstr(8, 2, "========================= ACTIVE TABLES ========================")
         
         row = 10
         with data_lock:
             if not tables_status:
-                stdscr.addstr(row, 4, "No active table endpoints discovered on the network yet.", curses.A_DIM)
+                stdscr.addstr(row, 4, "No active table endpoints discovered.", curses.A_DIM)
             else:
                 for tid, info in tables_status.items():
-                    if row + 4 >= h:
-                        break
+                    if row + 4 >= h: break  # Prevent overflow crashing
                     
                     status_str = f"[{tid}] -> Status: {info['status']}"
                     
                     if info['assistance']:
-                        stdscr.addstr(row, 4, f"{status_str} | ⚠️  REQUESTING MANAGER ASSISTANCE", curses.A_STANDOUT | curses.A_BLINK)
+                        stdscr.addstr(row, 4, f"{status_str} | ⚠️ NEEDS MANAGER", curses.A_STANDOUT | curses.A_BLINK)
                     else:
                         stdscr.addstr(row, 4, status_str)
                     
                     orders_list = ", ".join(info['orders']) if info['orders'] else "None"
                     stdscr.addstr(row+1, 6, f"Current Orders: {orders_list}", curses.A_DIM)
+                    
                     row += 3
                     
         stdscr.refresh()
-        
         try:
-            key = stdscr.getch()
-            if key == ord('q'):
-                break
+            if stdscr.getch() == ord('q'): break
         except Exception:
             pass
 
 @app.route('/register_table', methods=['POST'])
 def register() -> Any:
+    """HTTP endpoint for table units to declare network presence."""
     data = request.json or {}
     table_id = data.get('table_id')
     if table_id:
@@ -198,12 +195,12 @@ def register() -> Any:
         return jsonify({"status": "success"}), 200
     return jsonify({"status": "error"}), 400
 
-# --- LIVE AUDIO TCP STREAM SERVER LOGIC ---
 def handle_live_audio(client_socket: socket.socket, addr: Any) -> None:
-    """Manages a dedicated stream channel tracking audio payloads from a precise table socket."""
+    """Dedicated thread for parsing live I2S audio streams and synthesizing responses."""
     table_id = "Unknown"
+    client_socket.settimeout(30.0)
     try:
-        # Read the initial header containing the padded 10-byte Table identifier
+        # Extract fixed 10-byte identity header
         table_id_raw = client_socket.recv(10).decode('utf-8', errors='ignore').strip()
         if table_id_raw.startswith("Table"):
             table_id = table_id_raw
@@ -212,36 +209,42 @@ def handle_live_audio(client_socket: socket.socket, addr: Any) -> None:
                     tables_status[table_id]['status'] = "🔴 LIVE STREAMING"
 
         if not speech_model:
-            client_socket.close()
             return
             
         rec = KaldiRecognizer(speech_model, 16000)
         
-        # Read streaming data directly into the active Kaldi waveform pipeline
+        # Audio ingestion loop
         while True:
             data = client_socket.recv(4096)
-            if not data:
-                break
+            if not data: break
             rec.AcceptWaveform(data)
+            
+        # Give network window time to settle before transmitting back
+        time.sleep(0.1) 
 
-        # Process speech matching parameters upon completion of audio ingestion
-        result = json.loads(rec.FinalResult())
-        spoken_text = result.get("text", "").lower().replace("and", " ").replace("please", "")
+        try:
+            result = json.loads(rec.FinalResult())
+            spoken_text = result.get("text", "").lower().replace(" and ", " ").replace("please", "")
+        except json.JSONDecodeError:
+            spoken_text = ""
         
-        reply_text = "I didn't quite catch that, mate. Could you say it again?"
+        reply_text = "I didn't quite catch that. Could you say it again?"
         matched_items = []
 
+        # Logic branching for assistance vs ordering
         if any(word in spoken_text for word in ["help", "manager", "assistance", "staff"]):
             with data_lock:
                 if table_id in tables_status:
                     tables_status[table_id]['assistance'] = True
-            reply_text = "No worries, I've logged your request and called a manager over to your table."
-        else:
+            reply_text = "No worries, I've called a manager over to your table."
+            
+        elif spoken_text:
             remaining_text = spoken_text
             for item in menu_items:
                 if item["clean_name"] in remaining_text:
                     matched_items.append(item)
-                    remaining_text = remaining_text.replace(item["clean_name"], "")
+                    # Prevent double counting the same occurrence
+                    remaining_text = remaining_text.replace(item["clean_name"], "", 1)
                     
             if matched_items:
                 with data_lock:
@@ -249,6 +252,7 @@ def handle_live_audio(client_socket: socket.socket, addr: Any) -> None:
                         for item in matched_items:
                             tables_status[table_id]['orders'].append(f"{item['name']} (£{item['price']:.2f})")
                 
+                # Natural language grouping for the voice response
                 item_counts = Counter([i['name'] for i in matched_items])
                 spoken_list = [f"{count} orders of {name}" if count > 1 else name for name, count in item_counts.items()]
                 
@@ -261,13 +265,23 @@ def handle_live_audio(client_socket: socket.socket, addr: Any) -> None:
                     
                 reply_text = f"Got it! I have added {formatted_items} to your table's order."
 
-        # Compile TTS response directly to raw output blocks
+        # Generate Piper TTS locally
         out_file = f"/tmp/response_{table_id}.raw"
-        subprocess.run(f"echo '{reply_text}' | {PIPER_EXEC} --model {PIPER_MODEL} --output_raw > {out_file}", shell=True)
+        with open(out_file, "wb") as f:
+            subprocess.run(
+                [PIPER_EXEC, "--model", PIPER_MODEL, "--output_raw"],
+                input=reply_text.encode('utf-8'),
+                stdout=f,
+                stderr=subprocess.DEVNULL, # Protects curses terminal!
+                timeout=10
+            )
         
+        # Transmit synthesized voice payload back to hardware endpoint
         with open(out_file, "rb") as f:
             client_socket.sendall(f.read())
             
+    except socket.timeout:
+        pass
     except Exception:
         pass
     finally:
@@ -300,5 +314,4 @@ if __name__ == '__main__':
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=run_tcp_server, daemon=True).start()
     threading.Thread(target=flash_connected_pico, daemon=True).start()
-    
     curses.wrapper(update_terminal)
