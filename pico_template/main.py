@@ -16,11 +16,11 @@ audio_in = I2S(0,
                mode=I2S.RX, bits=16, format=I2S.MONO, 
                rate=16000, ibuf=10000)
 
-# MAX98357A Output Configuration (22,050Hz for Piper Playback Engine Match)
+# MAX98357A Output Configuration (16kHz for clean pipeline sync)
 audio_out = I2S(1, 
                 sck=Pin(20), ws=Pin(21), sd=Pin(22), 
                 mode=I2S.TX, bits=16, format=I2S.MONO, 
-                rate=22050, ibuf=10000)
+                rate=16000, ibuf=10000)
 
 # Synchronize base presence via HTTP API Layer
 try:
@@ -31,6 +31,11 @@ except Exception:
 print(f"[{TABLE_ID}] Live System Active. Tap once to START streaming, tap again to SEND.")
 
 def execute_live_stream():
+    # RELEASE GUARD: Wait for the user to lift their finger off the button first!
+    while touch_sensor.value() == 1:
+        time.sleep(0.05)
+    time.sleep(0.1) # Final debounce
+    
     print("🔴 Live socket transmission established...")
     
     s = usocket.socket()
@@ -44,16 +49,16 @@ def execute_live_stream():
     identity_header = (TABLE_ID + "          ")[:10]
     s.send(identity_header.encode())
     
-    # Software debounce adjustment to eliminate false toggle double-triggers
-    time.sleep(0.5) 
-    
     # Process small audio slice footprints to bypass device internal RAM limits
     audio_slice_buffer = bytearray(4000) 
     
     while True:
-        audio_in.readinto(audio_slice_buffer)
-        s.send(audio_slice_buffer)
-        
+        try:
+            audio_in.readinto(audio_slice_buffer)
+            s.send(audio_slice_buffer)
+        except OSError:
+            continue # Skip minor hardware pipeline glitches
+            
         # Monitor interface input line to trigger cessation commands
         if touch_sensor.value() == 1:
             print("⏹️ Termination trigger detected. Closing feed and awaiting processing output...")
@@ -64,11 +69,14 @@ def execute_live_stream():
     
     print("🔊 Initializing audio rendering pipeline...")
     while True:
-        response_chunk = s.recv(4096)
-        if not response_chunk:
+        try:
+            response_chunk = s.recv(4096)
+            if not response_chunk:
+                break
+            audio_out.write(response_chunk)
+        except Exception:
             break
-        audio_out.write(response_chunk)
-        
+            
     s.close()
     print("✨ Transmission sequence finalized successfully.")
 
@@ -77,5 +85,4 @@ while True:
     if touch_sensor.value() == 1:
         execute_live_stream()
         time.sleep(1.5)  # Global operational loop reset lockout protection
-        
     time.sleep(0.1)
