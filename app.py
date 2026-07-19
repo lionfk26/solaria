@@ -21,7 +21,7 @@ ai_log = "AI Engine Initializing..."
 
 # Configuration paths for USB auto-flashing and AI
 PICO_TEMPLATE_DIR = os.path.expanduser("~/solaria/pico_template")
-MNT_TARGET = "/media/pi/RPI-RP2"  # Default mount path for Raspberry Pi OS Bookworm
+MNT_TARGET = "/mnt/RPI-RP2"  # <-- UPDATED: DietPi Default USB Mount Target
 
 # Local AI Paths
 VOSK_MODEL_PATH = "models/vosk/vosk-model-small-en-us-0.15"
@@ -44,7 +44,7 @@ if os.path.exists(MENU_FILE):
                             "clean_name": item["name"].lower().replace("&", "and").replace("-", " "),
                             "price": item.get("price") or item.get("base_price", 0.0)
                         })
-        # Sort by length descending to match longest phrases first (e.g., "Cheesy Garlic Bread" before "Garlic Bread")
+        # Sort by length descending to match longest phrases first
         menu_items.sort(key=lambda x: len(x["clean_name"]), reverse=True)
     except Exception:
         pass
@@ -141,7 +141,7 @@ def update_terminal(stdscr) -> None:
         
         # Dashboard Header
         stdscr.attron(curses.A_BOLD)
-        stdscr.addstr(0, 2, " SOLARIA TERMINAL DASHBOARD - ACTIVE - PI 5 POWERED ")
+        stdscr.addstr(0, 2, " SOLARIA TERMINAL DASHBOARD - ACTIVE - DIETPI OPTIMIZED ")
         stdscr.attroff(curses.A_BOLD)
         stdscr.addstr(0, w - 25, f"Clock: {datetime.now().strftime('%H:%M:%S')}")
         
