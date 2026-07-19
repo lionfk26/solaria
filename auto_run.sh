@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Navigate to operational space
-cd /home/pi/solaria
+# Navigate to operational space in DietPi
+cd /root/solaria
 
 echo "Initializing network checking mechanisms..."
 # Check target host route loop definitions
