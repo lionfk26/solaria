@@ -1,0 +1,15 @@
+[Unit]
+Description=Solaria Local AI Server Engine
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/solaria
+ExecStart=/bin/bash /home/pi/solaria/auto_run.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
