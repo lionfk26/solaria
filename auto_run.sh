@@ -13,7 +13,7 @@ echo "Network connection validated successfully!"
 echo "Syncing system data files with GitHub origin repository..."
 # Align file state with target master definitions safely
 git fetch --all
-git reset --hard origin/main
+git pull origin main
 
 echo "Evaluating software dependencies..."
 source venv/bin/activate
