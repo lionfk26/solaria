@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Navigate to operational space in Pi Lite
-cd /home/pi/solaria
+# Navigate to operational space
+cd /home/freddiespi/solaria
 
 echo "Initializing network checking mechanisms..."
 while ! ping -c 1 -W 1 github.com &> /dev/null; do
@@ -10,7 +10,6 @@ done
 echo "Network connection validated successfully!"
 
 echo "Syncing system data files with GitHub origin repository..."
-# Align file state with target master definitions safely
 git fetch --all
 git pull origin main
 
