@@ -108,24 +108,80 @@ def get_local_ip():
 
 
 def load_menu():
+    """
+    Load menu.json and flatten it into a list of matchable items.
+
+    Supports the current Solaria format:
+        { "restaurant": ..., "menus": { "main_menu": { "<category>": [ {name, price, tags}, ... ] } } }
+
+    and, for backward compatibility, the older flat format:
+        { "items": [ {id, name, price, aliases, ...}, ... ] }
+    """
     try:
         with open(MENU_PATH, "r") as f:
             data = json.load(f)
-        return data.get("items", [])
     except (OSError, json.JSONDecodeError) as exc:
         log_ai(f"Failed to load menu.json: {exc}")
         return []
 
+    # Legacy flat format.
+    if "items" in data:
+        return data["items"]
+
+    items = []
+    menus = data.get("menus", {})
+    for menu_name, categories in menus.items():
+        for category, entries in categories.items():
+            for entry in entries:
+                name = entry.get("name", "").strip()
+                if not name:
+                    continue
+                slug = name.lower()
+                for ch in " &/-'’":
+                    slug = slug.replace(ch, "_")
+                slug = "_".join(filter(None, slug.split("_")))
+                items.append({
+                    "id": slug,
+                    "name": name,
+                    "category": category,
+                    "menu": menu_name,
+                    "price": entry.get("price", 0.0),
+                    "tags": entry.get("tags", []),
+                    "aliases": entry.get("aliases", []),
+                })
+
+    if not items:
+        log_ai("menu.json parsed but produced no items - check its structure.")
+
+    return items
+
+
+def _normalize_for_matching(text):
+    """Lowercase and fold '&'/'and' and '-' so spoken text matches written menu names."""
+    text = text.lower().replace("&", " and ").replace("-", " ")
+    return " ".join(text.split())
+
 
 def match_menu_item(text, menu_items):
-    """Very small keyword matcher: text -> best matching menu item, or None."""
-    text_l = text.lower()
+    """
+    Small keyword matcher: text -> best matching menu item, or None.
+
+    Checks the most specific (longest) names first so e.g. "Fish & Chips"
+    wins over a generic "Chips" side when both would technically match.
+    """
+    text_l = _normalize_for_matching(text)
+    candidates = []
     for item in menu_items:
-        names = [item["name"].lower()] + [a.lower() for a in item.get("aliases", [])]
+        names = [item["name"]] + item.get("aliases", [])
         for name in names:
-            if name in text_l:
-                return item
-    return None
+            name_l = _normalize_for_matching(name)
+            if name_l in text_l:
+                candidates.append((len(name_l), item))
+                break
+    if not candidates:
+        return None
+    candidates.sort(key=lambda pair: pair[0], reverse=True)
+    return candidates[0][1]
 
 
 # --------------------------------------------------------------------------
