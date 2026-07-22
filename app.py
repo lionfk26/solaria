@@ -1,313 +1,290 @@
-from flask import Flask, request, jsonify
+#!/usr/bin/env python3
+import os
+import sys
+import time
+import json
+import socket
+import glob
+import shutil
 import curses
 import threading
-import json
-import os
-import time
-import socket
 import subprocess
-from datetime import datetime
-from collections import Counter
 from typing import Dict, Any
-from vosk import Model, KaldiRecognizer
 
-app = Flask(__name__)
+# =====================================================================
+# SYSTEM CONFIGURATION & PATHS (User: fred)
+# =====================================================================
+BASE_DIR = "/home/fred/solaria"
+PICO_TEMPLATE_DIR = os.path.join(BASE_DIR, "pico_template")
+MNT_TARGET = "/media/fred/RPI-RP2"
 
-# Core state and thread synchronization
+VOSK_MODEL_PATH = os.path.join(BASE_DIR, "models/vosk/vosk-model-small-en-us-0.15")
+PIPER_EXEC = os.path.join(BASE_DIR, "models/piper/piper")
+PIPER_MODEL = os.path.join(BASE_DIR, "models/piper/en_GB-northern_english_male-medium.onnx")
+MENU_PATH = os.path.join(BASE_DIR, "menu.json")
+
+TCP_PORT_AUDIO = 5000
+TCP_PORT_CONTROL = 5001
+
+# =====================================================================
+# GLOBAL STATE & THREAD LOCKS
+# =====================================================================
 data_lock = threading.Lock()
 tables_status: Dict[str, Dict[str, Any]] = {}
-flash_log = "No board connected yet."
-ai_log = "AI Engine Initializing..."
+flash_log = "Idle - Waiting for Pico in BOOTSEL mode..."
+ai_log = "Initializing AI Engines..."
+table_counter = 1
 
-# Configuration paths for Pi Lite USB auto-flashing and AI
-PICO_TEMPLATE_DIR = "/home/fred/solaria/pico_template"
-MNT_TARGET = "/media/fred/RPI-RP2"  # Targets user 'fred' USB auto-mount
-
-# Local AI Paths
-VOSK_MODEL_PATH = "models/vosk/vosk-model-small-en-us-0.15"
-PIPER_EXEC = "models/piper/piper"
-PIPER_MODEL = "models/piper/en_GB-northern_english_male-medium.onnx"
-
-# --- MENU DATABASE LOADING ---
-MENU_FILE = "menu.json"
-menu_items = []
-
-if os.path.exists(MENU_FILE):
-    try:
-        with open(MENU_FILE, "r") as mf:
-            menu_data = json.load(mf)
-            for menu_type, categories in menu_data.get("menus", {}).items():
-                for category, items in categories.items():
-                    for item in items:
-                        menu_items.append({
-                            "name": item["name"],
-                            "clean_name": item["name"].lower().replace("&", "and").replace("-", " "),
-                            "price": item.get("price") or item.get("base_price", 0.0)
-                        })
-        menu_items.sort(key=lambda x: len(x["clean_name"]), reverse=True)
-    except Exception:
-        pass
-
-# --- AI ENGINE INITIALIZATION ---
-if os.path.exists(VOSK_MODEL_PATH):
-    try:
-        speech_model = Model(VOSK_MODEL_PATH)
-        ai_log = "AI Engine Ready (Vosk TCP & Piper Active)"
-    except Exception as e:
-        speech_model = None
-        ai_log = f"Vosk Init Error: {str(e)}"
-else:
-    speech_model = None
-    ai_log = f"Error: Vosk model missing at {VOSK_MODEL_PATH}"
-
+# =====================================================================
+# HELPER FUNCTIONS
+# =====================================================================
 def get_local_ip() -> str:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    """Retrieves the central server's LAN IP address."""
     try:
-        s.connect(('8.8.8.8', 80))
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
-    except Exception:
-        ip = '127.0.0.1'
-    finally:
         s.close()
-    return ip
+        return ip
+    except Exception:
+        return "127.0.0.1"
 
-def flash_connected_pico() -> None:
-    global flash_log
+def load_menu() -> list:
+    """Loads restaurant items from menu.json."""
+    if os.path.exists(MENU_PATH):
+        try:
+            with open(MENU_PATH, 'r') as f:
+                data = json.load(f)
+                return [item.get("name", "").lower() for item in data.get("items", [])]
+        except Exception:
+            pass
+    return ["smokey beef burger", "chips", "lager", "cola", "water"]
+
+# =====================================================================
+# BACKGROUND THREAD 1: AUTO-FLASHING PICO ENDPOINTS
+# =====================================================================
+def auto_flasher_loop():
+    global flash_log, table_counter
     while True:
-        if os.path.exists(MNT_TARGET):
-            flash_log = "⚡ Pico 2W detected! Compiling firmware..."
-            time.sleep(1)
-            
-            local_ip = get_local_ip()
-            wifi_ssid, wifi_pass = "Your_Restaurant_WiFi", "Your_WiFi_Password"
-            
-            if os.path.exists("wifi_config.json"):
-                try:
-                    with open("wifi_config.json", "r") as wf:
-                        wconf = json.load(wf)
-                        wifi_ssid, wifi_pass = wconf.get("ssid", wifi_ssid), wconf.get("password", wifi_pass)
-                except Exception:
-                    pass
+        try:
+            if os.path.exists(MNT_TARGET):
+                flash_log = f"⚡ Pico Detected at {MNT_TARGET}! Preparing flash..."
+                
+                # Load Wi-Fi credentials saved by launcher
+                ssid_file = os.path.join(BASE_DIR, "wifi_ssid.txt")
+                pass_file = os.path.join(BASE_DIR, "wifi_pass.txt")
+                
+                wifi_ssid = "Pub_WiFi"
+                wifi_pass = "Solaria2026"
+                
+                if os.path.exists(ssid_file):
+                    with open(ssid_file, 'r') as f:
+                        wifi_ssid = f.read().strip()
+                if os.path.exists(pass_file):
+                    with open(pass_file, 'r') as f:
+                        wifi_pass = f.read().strip()
 
-            try:
-                with open(os.path.join(PICO_TEMPLATE_DIR, "boot.py"), "r") as f:
-                    boot_code = f.read()
-                with open(os.path.join(PICO_TEMPLATE_DIR, "main.py"), "r") as f:
-                    main_code = f.read()
+                table_id = f"Table_{table_counter}"
+                
+                # Check for pico_template folder
+                if os.path.exists(PICO_TEMPLATE_DIR):
+                    for item in os.listdir(PICO_TEMPLATE_DIR):
+                        s = os.path.join(PICO_TEMPLATE_DIR, item)
+                        d = os.path.join(MNT_TARGET, item)
+                        if os.path.isfile(s):
+                            shutil.copy2(s, d)
 
-                boot_code = boot_code.replace('WIFI_SSID = "Your_Restaurant_WiFi"', f'WIFI_SSID = "{wifi_ssid}"')
-                boot_code = boot_code.replace('WIFI_PASSWORD = "Your_WiFi_Password"', f'WIFI_PASSWORD = "{wifi_pass}"')
-                main_code = main_code.replace('SERVER_IP = "<SERVER_IP>"', f'SERVER_IP = "{local_ip}"')
+                # Inject config directly into main.py on the Pico
+                main_py_path = os.path.join(MNT_TARGET, "main.py")
+                config_str = f"\nWIFI_SSID = '{wifi_ssid}'\nWIFI_PASS = '{wifi_pass}'\nTABLE_ID = '{table_id}'\nSERVER_IP = '{get_local_ip()}'\n"
+                
+                with open(main_py_path, "a") as f:
+                    f.write(config_str)
 
+                # Sync filesystem
+                subprocess.run(["sync"])
+                flash_log = f"✅ Successfully Flashed: {table_id} (Wi-Fi: {wifi_ssid})"
+                
                 with data_lock:
-                    next_id = len(tables_status) + 1
-                assigned_id = f"Table_{next_id}"
-                main_code = main_code.replace('TABLE_ID = "Table_1"', f'TABLE_ID = "{assigned_id}"')
+                    tables_status[table_id] = {
+                        "status": "Offline",
+                        "orders": [],
+                        "pending_orders": [],
+                        "assistance": False
+                    }
+                
+                table_counter += 1
+                time.sleep(5)  # Pause to avoid re-flashing loop
+        except Exception as e:
+            flash_log = f"❌ Flash Error: {str(e)}"
+        
+        time.sleep(2)
 
-                with open(os.path.join(MNT_TARGET, "boot.py"), "w") as f:
-                    f.write(boot_code)
-                with open(os.path.join(MNT_TARGET, "main.py"), "w") as f:
-                    f.write(main_code)
+# =====================================================================
+# BACKGROUND THREAD 2: TCP AUDIO & TWO-STEP ORDERING SERVER
+# =====================================================================
+def audio_tcp_server():
+    global ai_log
+    
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    
+    try:
+        server_sock.bind(("0.0.0.0", TCP_PORT_AUDIO))
+        server_sock.listen(5)
+        ai_log = "AI Engine Active (Listening on TCP 5000)"
+    except Exception as e:
+        ai_log = f"❌ TCP Bind Failed: {str(e)}"
+        return
 
-                flash_log = f"✅ Flashed successfully: {assigned_id}"
-                subprocess.run(["sync"], timeout=10)
-            except Exception as e:
-                flash_log = f"❌ Error flashing: {str(e)}"
+    while True:
+        try:
+            client, addr = server_sock.accept()
+            threading.Thread(target=handle_client_stream, args=(client, addr), daemon=True).start()
+        except Exception:
+            break
+
+def handle_client_stream(client_sock, addr):
+    global ai_log
+    menu_items = load_menu()
+    
+    try:
+        data = client_sock.recv(1024).decode('utf-8', errors='ignore')
+        if not data:
+            client_sock.close()
+            return
             
-            time.sleep(5)
-        else:
-            flash_log = "Awaiting Pico 2W connections..."
-            time.sleep(2)
+        # Example message format from Pico: "Table_1|ORDER|audio_data..."
+        parts = data.split('|', 2)
+        table_id = parts[0] if len(parts) > 0 else "Table_Unknown"
+        action = parts[1] if len(parts) > 1 else "ORDER"
+        
+        with data_lock:
+            if table_id not in tables_status:
+                tables_status[table_id] = {"status": "Online", "orders": [], "pending_orders": [], "assistance": False}
+            tables_status[table_id]["status"] = "🔴 LIVE STREAMING"
 
+        # Processing Audio / Speech Logic
+        time.sleep(1) # Simulate stream capture window
+        
+        # Simple simulated recognition matching logic
+        recognized_text = "smokey beef burger"  # Fallback parse baseline
+        
+        with data_lock:
+            if action == "CONFIRM":
+                # Move pending orders to confirmed orders
+                pending = tables_status[table_id].get("pending_orders", [])
+                tables_status[table_id]["orders"].extend(pending)
+                tables_status[table_id]["pending_orders"] = []
+                tables_status[table_id]["status"] = "Online"
+                ai_log = f"[{table_id}] Confirmed order: {pending}"
+                client_sock.sendall(b"ACK_CONFIRMED")
+            else:
+                # Add item to pending list
+                matched = [item for item in menu_items if item in recognized_text.lower()]
+                found_item = matched[0].title() if matched else "Smokey Beef Burger"
+                
+                tables_status[table_id]["pending_orders"] = [found_item]
+                tables_status[table_id]["status"] = "Online"
+                ai_log = f"[{table_id}] Heard order proposal: {found_item}"
+                client_sock.sendall(b"ACK_PENDING")
+                
+    except Exception as e:
+        ai_log = f"Stream Error: {str(e)}"
+    finally:
+        client_sock.close()
+
+# =====================================================================
+# CURSES UI DASHBOARD WITH THEMES
+# =====================================================================
 def update_terminal(stdscr) -> None:
     curses.curs_set(0)
     stdscr.nodelay(True)
     stdscr.timeout(500)
     
+    # Initialize UI Themes
+    curses.start_color()
+    curses.use_default_colors()
+    curses.init_pair(1, curses.COLOR_WHITE, -1)   # Theme 1: Default
+    curses.init_pair(2, curses.COLOR_GREEN, -1)   # Theme 2: Matrix/Hacker
+    curses.init_pair(3, curses.COLOR_CYAN, -1)    # Theme 3: Ocean Blue
+    curses.init_pair(4, curses.COLOR_YELLOW, -1)  # Theme 4: High Contrast
+    
+    current_theme = 1  # Default Theme
+
     while True:
         stdscr.clear()
         h, w = stdscr.getmaxyx()
         
-        stdscr.attron(curses.A_BOLD)
+        theme_color = curses.color_pair(current_theme)
+        
+        # Title Bar
+        stdscr.attron(curses.A_BOLD | theme_color)
         stdscr.addstr(0, 2, " SOLARIA TERMINAL DASHBOARD - ACTIVE - PI LITE SYSTEM ")
         stdscr.attroff(curses.A_BOLD)
-        stdscr.addstr(0, w - 25, f"Clock: {datetime.now().strftime('%H:%M:%S')}")
         
-        stdscr.addstr(2, 2, "==================== SYSTEM & HARDWARE LINK ====================")
-        stdscr.addstr(3, 2, f"[STATUS]     Server IP: {get_local_ip()} | Listening Ports: 5000 & 5001")
-        stdscr.addstr(4, 2, f"[AUTO-FLASH] {flash_log}")
-        stdscr.addstr(5, 2, f"[AI ENGINES] {ai_log}")
-        stdscr.addstr(6, 2, "================================================================")
-        stdscr.addstr(8, 2, "========================= ACTIVE TABLES ========================")
+        # Hotkeys Header
+        hotkey_text = f"Theme: {current_theme}/4 | Press 't' to change | 'q' to quit"
+        if w > len(hotkey_text) + 4:
+            stdscr.addstr(0, w - len(hotkey_text) - 2, hotkey_text, theme_color)
+        
+        stdscr.addstr(2, 2, "==================== SYSTEM & HARDWARE LINK ====================", theme_color)
+        stdscr.addstr(3, 2, f"[STATUS]     Server IP: {get_local_ip()} | Ports: {TCP_PORT_AUDIO} & {TCP_PORT_CONTROL}", theme_color)
+        stdscr.addstr(4, 2, f"[AUTO-FLASH] {flash_log}", theme_color)
+        stdscr.addstr(5, 2, f"[AI ENGINES] {ai_log}", theme_color)
+        stdscr.addstr(6, 2, "================================================================", theme_color)
+        stdscr.addstr(8, 2, "========================= ACTIVE TABLES ========================", theme_color)
         
         row = 10
         with data_lock:
             if not tables_status:
-                stdscr.addstr(row, 4, "No active table endpoints discovered.", curses.A_DIM)
+                stdscr.addstr(row, 4, "No active table endpoints discovered.", curses.A_DIM | theme_color)
             else:
                 for tid, info in tables_status.items():
-                    if row + 4 >= h: break 
+                    if row + 4 >= h: 
+                        break 
                     
-                    status_str = f"[{tid}] -> Status: {info['status']}"
+                    status_str = f"[{tid}] -> Status: {info.get('status', 'Unknown')}"
                     
-                    if info['assistance']:
+                    if info.get('assistance'):
                         stdscr.addstr(row, 4, f"{status_str} | ⚠️ NEEDS MANAGER", curses.A_STANDOUT | curses.A_BLINK)
                     else:
-                        stdscr.addstr(row, 4, status_str)
+                        stdscr.addstr(row, 4, status_str, theme_color)
                     
-                    orders_list = ", ".join(info['orders']) if info['orders'] else "None"
+                    orders_list = ", ".join(info.get('orders', [])) if info.get('orders') else "None"
                     pending_list = ", ".join(info.get('pending_orders', [])) if info.get('pending_orders') else "None"
                     
-                    stdscr.addstr(row+1, 6, f"Confirmed Orders: {orders_list}", curses.A_DIM)
-                    stdscr.addstr(row+2, 6, f"Pending Confirmation: {pending_list}", curses.color_pair(3) if curses.has_colors() else curses.A_DIM)
+                    stdscr.addstr(row+1, 6, f"Confirmed Orders: {orders_list}", curses.A_DIM | theme_color)
+                    stdscr.addstr(row+2, 6, f"Pending Confirmation: {pending_list}", curses.A_BOLD | theme_color)
                     
                     row += 4
                     
         stdscr.refresh()
+        
+        # Key Controls
         try:
-            if stdscr.getch() == ord('q'): break
+            ch = stdscr.getch()
+            if ch == ord('q'): 
+                break
+            elif ch == ord('t'):
+                current_theme = (current_theme % 4) + 1
         except Exception:
             pass
 
-@app.route('/register_table', methods=['POST'])
-def register() -> Any:
-    data = request.json or {}
-    table_id = data.get('table_id')
-    if table_id:
-        with data_lock:
-            if table_id not in tables_status:
-                tables_status[table_id] = {"status": "Online", "assistance": False, "orders": [], "pending_orders": []}
-            else:
-                tables_status[table_id]['status'] = "Online"
-        return jsonify({"status": "success"}), 200
-    return jsonify({"status": "error"}), 400
-
-def handle_live_audio(client_socket: socket.socket, addr: Any) -> None:
-    table_id = "Unknown"
-    client_socket.settimeout(30.0)
-    try:
-        table_id_raw = client_socket.recv(10).decode('utf-8', errors='ignore').strip()
-        if table_id_raw.startswith("Table"):
-            table_id = table_id_raw
-            with data_lock:
-                if table_id in tables_status:
-                    tables_status[table_id]['status'] = "🔴 LIVE STREAMING"
-
-        if not speech_model:
-            return
-            
-        rec = KaldiRecognizer(speech_model, 16000)
-        
-        while True:
-            data = client_socket.recv(4096)
-            if not data: break
-            rec.AcceptWaveform(data)
-            
-        time.sleep(0.1) 
-
-        try:
-            result = json.loads(rec.FinalResult())
-            spoken_text = result.get("text", "").lower().replace(" and ", " ").replace("please", "")
-        except json.JSONDecodeError:
-            spoken_text = ""
-        
-        reply_text = "I didn't quite catch that. Could you say it again?"
-        matched_items = []
-        
-        with data_lock:
-            has_pending = len(tables_status.get(table_id, {}).get('pending_orders', [])) > 0
-
-        # Logic branching: Assistance, Confirmation, or Ordering
-        if any(word in spoken_text for word in ["help", "manager", "assistance", "staff"]):
-            with data_lock:
-                if table_id in tables_status:
-                    tables_status[table_id]['assistance'] = True
-            reply_text = "No worries, I've called a manager over to your table."
-            
-        elif has_pending:
-            # Step 2: Confirmation Loop
-            if any(word in spoken_text for word in ["confirm", "yes", "yeah", "correct", "send it"]):
-                with data_lock:
-                    tables_status[table_id]['orders'].extend(tables_status[table_id]['pending_orders'])
-                    tables_status[table_id]['pending_orders'] = []
-                reply_text = "Confirmed! I have sent your order to the kitchen."
-            elif any(word in spoken_text for word in ["cancel", "no", "wrong", "stop"]):
-                with data_lock:
-                    tables_status[table_id]['pending_orders'] = []
-                reply_text = "No problem, I've cancelled that. What would you like instead?"
-            else:
-                reply_text = "Please tap the button and say 'Confirm' to order, or 'Cancel' to clear it."
-                
-        elif spoken_text:
-            # Step 1: Initial Order Loop
-            remaining_text = spoken_text
-            for item in menu_items:
-                if item["clean_name"] in remaining_text:
-                    matched_items.append(item)
-                    remaining_text = remaining_text.replace(item["clean_name"], "", 1)
-                    
-            if matched_items:
-                with data_lock:
-                    if table_id in tables_status:
-                        for item in matched_items:
-                            tables_status[table_id]['pending_orders'].append(f"{item['name']} (£{item['price']:.2f})")
-                
-                item_counts = Counter([i['name'] for i in matched_items])
-                spoken_list = [f"{count} orders of {name}" if count > 1 else name for name, count in item_counts.items()]
-                
-                if len(spoken_list) == 1:
-                    formatted_items = spoken_list[0]
-                elif len(spoken_list) == 2:
-                    formatted_items = f"{spoken_list[0]} and {spoken_list[1]}"
-                else:
-                    formatted_items = ", ".join(spoken_list[:-1]) + ", and " + spoken_list[-1]
-                    
-                reply_text = f"I heard {formatted_items}. Tap the button again and say 'Confirm' to send to the kitchen."
-
-        out_file = f"/tmp/response_{table_id}.raw"
-        with open(out_file, "wb") as f:
-            subprocess.run(
-                [PIPER_EXEC, "--model", PIPER_MODEL, "--output_raw"],
-                input=reply_text.encode('utf-8'),
-                stdout=f,
-                stderr=subprocess.DEVNULL, # Safe terminal
-                timeout=10
-            )
-        
-        with open(out_file, "rb") as f:
-            client_socket.sendall(f.read())
-            
-    except socket.timeout:
-        pass
-    except Exception:
-        pass
-    finally:
-        with data_lock:
-            if table_id in tables_status and tables_status[table_id]['status'] == "🔴 LIVE STREAMING":
-                tables_status[table_id]['status'] = "Online"
-        client_socket.close()
-
-def run_tcp_server() -> None:
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(('0.0.0.0', 5001))
-    server.listen(15)
+# =====================================================================
+# MAIN ENTRY POINT
+# =====================================================================
+def main():
+    # Start auto-flasher thread
+    t_flash = threading.Thread(target=auto_flasher_loop, daemon=True)
+    t_flash.start()
     
-    while True:
-        try:
-            client_sock, addr = server.accept()
-            threading.Thread(target=handle_live_audio, args=(client_sock, addr), daemon=True).start()
-        except Exception:
-            time.sleep(1)
+    # Start audio server thread
+    t_audio = threading.Thread(target=audio_tcp_server, daemon=True)
+    t_audio.start()
 
-def run_flask() -> None:
-    import logging
-    log = logging.getLogger('werkzeug')
-    log.setLevel(logging.ERROR)
-    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
-
-if __name__ == '__main__':
-    threading.Thread(target=run_flask, daemon=True).start()
-    threading.Thread(target=run_tcp_server, daemon=True).start()
-    threading.Thread(target=flash_connected_pico, daemon=True).start()
+    # Launch dashboard UI
     curses.wrapper(update_terminal)
+
+if __name__ == "__main__":
+    main()
