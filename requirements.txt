@@ -1,4 +1,4 @@
-vosk
-Flask
-requests
-urllib3
+vosk==0.3.45
+flask==3.0.3
+requests==2.32.3
+urllib3==2.2.2
