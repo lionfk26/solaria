@@ -15,7 +15,7 @@ wget -q --show-progress https://alphacephei.com/vosk/models/vosk-model-small-en-
 unzip -q vosk-model-small-en-us-0.15.zip
 rm vosk-model-small-en-us-0.15.zip
 
-# 2. Download Piper TTS Executable (ARM64)
+# 2. Download Piper TTS Engine (ARM64)
 echo "--> Downloading Piper TTS Engine..."
 cd /home/fred/solaria/models/piper
 wget -q --show-progress https://github.com/rhasspy/piper/releases/download/2023.8.15-2/piper_arm64.tar.gz
@@ -23,9 +23,9 @@ tar -xzf piper_arm64.tar.gz --strip-components=1
 rm piper_arm64.tar.gz
 chmod +x piper
 
-# 3. Download Northern English Voice Model
-echo "--> Downloading Voice Model..."
+# 3. Download Voice Model
+echo "--> Downloading Northern English Voice Model..."
 wget -q --show-progress https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/northern_english_male/medium/en_GB-northern_english_male-medium.onnx
 wget -q --show-progress https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/northern_english_male/medium/en_GB-northern_english_male-medium.onnx.json
 
-echo "✅ AI Engines downloaded and placed successfully!"
+echo "✅ AI Engines downloaded and configured successfully!"
