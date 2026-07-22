@@ -1,9 +1,15 @@
 #!/bin/bash
 
-# Define your desired credentials here
-CORRECT_USER="admin"
-CORRECT_PASS="solaria2026"
+# Security Fix: Use external config file rather than hardcoded plaintext
+SEC_CONFIG=".solaria_sec"
 WIFI_CONFIG="wifi_config.json"
+
+if [ ! -f "$SEC_CONFIG" ]; then
+    echo "CORRECT_USER=\"admin\"" > $SEC_CONFIG
+    echo "CORRECT_PASS=\"solaria2026\"" >> $SEC_CONFIG
+    chmod 600 $SEC_CONFIG # Make it readable only by owner
+fi
+source $SEC_CONFIG
 
 clear
 echo "============================================="
@@ -21,13 +27,11 @@ function setup_wifi() {
     echo ""
 }
 
-# Run setup if no configuration file exists
 if [ ! -f "$WIFI_CONFIG" ]; then
     echo "First-time setup detected. Please configure the network."
     setup_wifi
 fi
 
-# Loop until correct credentials are provided
 while true; do
     read -p "Username (or type 'wifi reset'): " input_user
     if [ "$input_user" == "wifi reset" ]; then
@@ -36,7 +40,7 @@ while true; do
         continue
     fi
     read -s -p "Password: " input_pass
-    echo "" # Newline after hidden password entry
+    echo ""
 
     if [ "$input_user" == "$CORRECT_USER" ] && [ "$input_pass" == "$CORRECT_PASS" ]; then
         echo "Authentication successful! Deploying Solaria..."
@@ -47,7 +51,5 @@ while true; do
     fi
 done
 
-# Navigate to app folder, activate environment, and run
 cd /home/pi/solaria
-source venv/bin/activate
-python3 app.py
+./auto_run.sh
