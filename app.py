@@ -10,6 +10,9 @@ import threading
 import subprocess
 from typing import Dict, Any
 
+# =====================================================================
+# SYSTEM CONFIGURATION & PATHS (User: fred)
+# =====================================================================
 BASE_DIR = "/home/fred/solaria"
 PICO_TEMPLATE_DIR = os.path.join(BASE_DIR, "pico_template")
 MNT_TARGET = "/media/fred/RPI-RP2"
@@ -18,13 +21,20 @@ MENU_PATH = os.path.join(BASE_DIR, "menu.json")
 TCP_PORT_AUDIO = 5000
 TCP_PORT_CONTROL = 5001
 
+# =====================================================================
+# GLOBAL STATE & THREAD LOCKS
+# =====================================================================
 data_lock = threading.Lock()
 tables_status: Dict[str, Dict[str, Any]] = {}
 flash_log = "Idle - Waiting for Pico in BOOTSEL mode..."
 ai_log = "Initializing AI Engines..."
 table_counter = 1
 
+# =====================================================================
+# HELPER FUNCTIONS
+# =====================================================================
 def get_local_ip() -> str:
+    """Retrieves the central server's LAN IP address."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
@@ -35,6 +45,7 @@ def get_local_ip() -> str:
         return "127.0.0.1"
 
 def load_menu() -> list:
+    """Loads restaurant items from menu.json."""
     if os.path.exists(MENU_PATH):
         try:
             with open(MENU_PATH, 'r') as f:
@@ -44,11 +55,26 @@ def load_menu() -> list:
             pass
     return ["smokey beef burger", "chips", "lager", "cola", "water"]
 
+# =====================================================================
+# BACKGROUND THREAD 1: AUTO-MOUNT & AUTO-FLASHING PICO ENDPOINTS
+# =====================================================================
 def auto_flasher_loop():
     global flash_log, table_counter
+    
+    # Ensure mount point exists
+    os.makedirs(MNT_TARGET, exist_ok=True)
+    
     while True:
         try:
-            if os.path.exists(MNT_TARGET):
+            device_label_path = "/dev/disk/by-label/RPI-RP2"
+            
+            # Check if Pico USB storage device is detected on Linux block layer
+            if os.path.exists(device_label_path):
+                # Auto-mount to /media/fred/RPI-RP2 if not currently mounted
+                if not os.path.ismount(MNT_TARGET):
+                    subprocess.run(["sudo", "mount", device_label_path, MNT_TARGET], check=True)
+                    time.sleep(1)
+
                 flash_log = f"⚡ Pico Detected at {MNT_TARGET}! Preparing flash..."
                 
                 ssid_file = os.path.join(BASE_DIR, "wifi_ssid.txt")
@@ -57,36 +83,55 @@ def auto_flasher_loop():
                 wifi_pass = "Solaria2026"
                 
                 if os.path.exists(ssid_file):
-                    with open(ssid_file, 'r') as f: wifi_ssid = f.read().strip()
+                    with open(ssid_file, 'r') as f: 
+                        wifi_ssid = f.read().strip()
                 if os.path.exists(pass_file):
-                    with open(pass_file, 'r') as f: wifi_pass = f.read().strip()
+                    with open(pass_file, 'r') as f: 
+                        wifi_pass = f.read().strip()
 
                 table_id = f"Table_{table_counter}"
                 
+                # Copy Pico template folder contents
                 if os.path.exists(PICO_TEMPLATE_DIR):
                     for item in os.listdir(PICO_TEMPLATE_DIR):
                         s = os.path.join(PICO_TEMPLATE_DIR, item)
                         d = os.path.join(MNT_TARGET, item)
-                        if os.path.isfile(s): shutil.copy2(s, d)
+                        if os.path.isfile(s): 
+                            shutil.copy2(s, d)
 
+                # Inject configurations into main.py
                 main_py_path = os.path.join(MNT_TARGET, "main.py")
                 config_str = f"\nWIFI_SSID = '{wifi_ssid}'\nWIFI_PASS = '{wifi_pass}'\nTABLE_ID = '{table_id}'\nSERVER_IP = '{get_local_ip()}'\n"
                 
                 with open(main_py_path, "a") as f:
                     f.write(config_str)
 
+                # Flush filesystem buffers
                 subprocess.run(["sync"])
-                flash_log = f"✅ Successfully Flashed: {table_id} (Wi-Fi: {wifi_ssid})"
+                
+                # Unmount safely
+                subprocess.run(["sudo", "umount", MNT_TARGET])
+                
+                flash_log = f"✅ Flashed {table_id}! You can now disconnect USB."
                 
                 with data_lock:
-                    tables_status[table_id] = {"status": "Offline", "orders": [], "pending_orders": [], "assistance": False}
+                    tables_status[table_id] = {
+                        "status": "Offline", 
+                        "orders": [], 
+                        "pending_orders": [], 
+                        "assistance": False
+                    }
                 
                 table_counter += 1
                 time.sleep(5)
         except Exception as e:
             flash_log = f"❌ Flash Error: {str(e)}"
+        
         time.sleep(2)
 
+# =====================================================================
+# BACKGROUND THREAD 2: TCP AUDIO & TWO-STEP ORDERING SERVER
+# =====================================================================
 def audio_tcp_server():
     global ai_log
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -112,7 +157,8 @@ def handle_client_stream(client_sock, addr):
     menu_items = load_menu()
     try:
         data = client_sock.recv(1024).decode('utf-8', errors='ignore')
-        if not data: return
+        if not data: 
+            return
             
         parts = data.split('|', 2)
         table_id = parts[0] if len(parts) > 0 else "Table_Unknown"
@@ -147,6 +193,9 @@ def handle_client_stream(client_sock, addr):
     finally:
         client_sock.close()
 
+# =====================================================================
+# CURSES UI DASHBOARD WITH THEMES
+# =====================================================================
 def update_terminal(stdscr) -> None:
     curses.curs_set(0)
     stdscr.nodelay(True)
@@ -154,10 +203,10 @@ def update_terminal(stdscr) -> None:
     
     curses.start_color()
     curses.use_default_colors()
-    curses.init_pair(1, curses.COLOR_WHITE, -1)   # Default
-    curses.init_pair(2, curses.COLOR_GREEN, -1)   # Matrix
-    curses.init_pair(3, curses.COLOR_CYAN, -1)    # Ocean
-    curses.init_pair(4, curses.COLOR_YELLOW, -1)  # High Contrast
+    curses.init_pair(1, curses.COLOR_WHITE, -1)   # Theme 1: Default
+    curses.init_pair(2, curses.COLOR_GREEN, -1)   # Theme 2: Matrix
+    curses.init_pair(3, curses.COLOR_CYAN, -1)    # Theme 3: Ocean
+    curses.init_pair(4, curses.COLOR_YELLOW, -1)  # Theme 4: High Contrast
     
     current_theme = 1
 
@@ -187,7 +236,8 @@ def update_terminal(stdscr) -> None:
                 stdscr.addstr(row, 4, "No active table endpoints discovered.", curses.A_DIM | theme_color)
             else:
                 for tid, info in tables_status.items():
-                    if row + 4 >= h: break 
+                    if row + 4 >= h: 
+                        break 
                     
                     status_str = f"[{tid}] -> Status: {info.get('status', 'Unknown')}"
                     
@@ -208,11 +258,16 @@ def update_terminal(stdscr) -> None:
         
         try:
             ch = stdscr.getch()
-            if ch == ord('q'): break
-            elif ch == ord('t'): current_theme = (current_theme % 4) + 1
+            if ch == ord('q'): 
+                break
+            elif ch == ord('t'): 
+                current_theme = (current_theme % 4) + 1
         except Exception:
             pass
 
+# =====================================================================
+# MAIN ENTRY POINT
+# =====================================================================
 def main():
     threading.Thread(target=auto_flasher_loop, daemon=True).start()
     threading.Thread(target=audio_tcp_server, daemon=True).start()
