@@ -1,14 +1,6 @@
-# Python Virtual Environment
 venv/
 __pycache__/
-*.pyc
-
-# Downloaded AI Models (Managed by install_assets.sh)
 models/
-
-# Generated Wi-Fi Configs
 wifi_ssid.txt
 wifi_pass.txt
-
-# System / OS Files
 .DS_Store
