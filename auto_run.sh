@@ -1,7 +1,5 @@
 #!/bin/bash
-
-# Navigate to operational space
-cd /home/freddiespi/solaria
+cd /home/fred/solaria
 
 echo "Initializing network checking mechanisms..."
 while ! ping -c 1 -W 1 github.com &> /dev/null; do
