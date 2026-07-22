@@ -20,7 +20,7 @@ flash_log = "No board connected yet."
 ai_log = "AI Engine Initializing..."
 
 # Configuration paths for Pi Lite USB auto-flashing and AI
-PICO_TEMPLATE_DIR = "/home/pi/solaria/pico_template"
+PICO_TEMPLATE_DIR = "/home/freddiespi/solaria/pico_template"
 MNT_TARGET = "/media/pi/RPI-RP2"  # Pi OS Default USB Mount Target
 
 # Local AI Paths
