@@ -1,13 +1,13 @@
 [Unit]
-Description=Solaria Local AI Server Engine (DietPi Optimized)
+Description=Solaria Local AI Server Engine (Pi Lite)
 Wants=network-online.target
 After=network-online.target
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory=/root/solaria
-ExecStart=/bin/bash /root/solaria/auto_run.sh
+User=pi
+WorkingDirectory=/home/pi/solaria
+ExecStart=/bin/bash /home/pi/solaria/auto_run.sh
 Restart=always
 RestartSec=5
 
