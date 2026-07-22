@@ -5,9 +5,9 @@ After=network-online.target
 
 [Service]
 Type=simple
-User=freddiespi
-WorkingDirectory=/home/freddiespi/solaria
-ExecStart=/bin/bash /home/freddiespi/solaria/auto_run.sh
+User=fred
+WorkingDirectory=/home/fred/solaria
+ExecStart=/bin/bash /home/fred/solaria/auto_run.sh
 Restart=always
 RestartSec=5
 
