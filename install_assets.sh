@@ -9,7 +9,7 @@
 
 set -e
 
-BASE_DIR="/home/fred/solaria"
+BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODELS_DIR="${BASE_DIR}/models"
 VOSK_DIR="${MODELS_DIR}/vosk"
 PIPER_DIR="${MODELS_DIR}/piper"
