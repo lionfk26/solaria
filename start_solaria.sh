@@ -51,5 +51,5 @@ while true; do
     fi
 done
 
-cd /home/pi/solaria
+cd /home/freddiespi/solaria
 ./auto_run.sh
