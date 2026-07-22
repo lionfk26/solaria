@@ -1,44 +1,47 @@
 #!/bin/bash
 
-# Security Fix: Use external config file rather than hardcoded plaintext
-SEC_CONFIG=".solaria_sec"
-WIFI_CONFIG="wifi_config.json"
+# Solaria Launcher Dashboard
+echo "================================================="
+echo "   SOLARIA LOCAL AI SYSTEM - INITIALIZATION      "
+echo "================================================="
 
-if [ ! -f "$SEC_CONFIG" ]; then
-    echo "CORRECT_USER=\"admin\"" > $SEC_CONFIG
-    echo "CORRECT_PASS=\"solaria2026\"" >> $SEC_CONFIG
-    chmod 600 $SEC_CONFIG # Make it readable only by owner
-fi
-source $SEC_CONFIG
+CORRECT_USER="test"
+CORRECT_PASS="test"
 
-clear
-echo "============================================="
-echo "       SOLARIA CENTRAL MANAGEMENT SYSTEM      "
-echo "============================================="
-echo ""
-
-function setup_wifi() {
-    echo "--- Network Configuration ---"
-    read -p "Enter Restaurant Wi-Fi SSID (Name): " wifi_ssid
-    read -p "Enter Wi-Fi Password: " wifi_pass
-    echo "{\"ssid\": \"$wifi_ssid\", \"password\": \"$wifi_pass\"}" > $WIFI_CONFIG
-    echo "✅ Wi-Fi credentials saved successfully!"
-    echo "-----------------------------"
-    echo ""
+setup_wifi() {
+    echo "--- TABLE ENDPOINT WI-FI SETUP ---"
+    read -p "Enter Pub Wi-Fi SSID: " wifi_ssid
+    read -p "Enter Pub Wi-Fi Password: " wifi_pass
+    
+    # Save to a temporary config file that app.py can read during flashing
+    echo "$wifi_ssid" > /home/fred/solaria/wifi_ssid.txt
+    echo "$wifi_pass" > /home/fred/solaria/wifi_pass.txt
+    echo "✅ Wi-Fi credentials saved for next Pico flash."
 }
 
-if [ ! -f "$WIFI_CONFIG" ]; then
-    echo "First-time setup detected. Please configure the network."
-    setup_wifi
-fi
-
 while true; do
-    read -p "Username (or type 'wifi reset'): " input_user
+    read -p "Username (or type 'wifi reset' / 'help'): " input_user
+    
+    # HELP MENU COMMAND
+    if [ "$input_user" == "help" ]; then
+        echo ""
+        echo "================ SOLARIA HELP MENU ================"
+        echo " * LOGIN: Enter 'admin' then your password."
+        echo " * WI-FI: Type 'wifi reset' to change endpoint network."
+        echo " * EXIT: Press CTRL+C to close the terminal."
+        echo "==================================================="
+        echo ""
+        continue
+    fi
+
+    # WI-FI RESET COMMAND
     if [ "$input_user" == "wifi reset" ]; then
         echo ""
         setup_wifi
         continue
     fi
+
+    # STANDARD LOGIN
     read -s -p "Password: " input_pass
     echo ""
 
@@ -51,5 +54,6 @@ while true; do
     fi
 done
 
+# Launch the main system
 cd /home/fred/solaria
 ./auto_run.sh
