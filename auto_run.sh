@@ -1,10 +1,9 @@
 #!/bin/bash
 
-# Navigate to operational space in DietPi
-cd /root/solaria
+# Navigate to operational space in Pi Lite
+cd /home/pi/solaria
 
 echo "Initializing network checking mechanisms..."
-# Check target host route loop definitions
 while ! ping -c 1 -W 1 github.com &> /dev/null; do
     sleep 2
 done
