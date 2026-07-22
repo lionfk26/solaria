@@ -1,88 +1,65 @@
-import urequests
-import usocket
+import network
+import socket
 import time
-from machine import Pin, I2S
+from machine import Pin
 
-# --- RUNTIME CORE SETTINGS ---
-TABLE_ID = "Table_1"
-SERVER_IP = "<SERVER_IP>"  # Automatically provisioned via auto-flasher
+# Hardware Pin Assignments
+SCK_PIN = 16
+WS_PIN = 17
+SD_PIN = 18
 
-# --- PIN MAP DEFINITIONS ---
+BCLK_PIN = 20
+LRC_PIN = 21
+DIN_PIN = 22
+
 touch_sensor = Pin(15, Pin.IN)
 
-# INMP441 Microchip Configuration (16kHz Audio Sample Collection Rate)
-audio_in = I2S(0, 
-               sck=Pin(16), ws=Pin(17), sd=Pin(18), 
-               mode=I2S.RX, bits=16, format=I2S.MONO, 
-               rate=16000, ibuf=10000)
+# Network values injected automatically during auto-flash
+WIFI_SSID = ''
+WIFI_PASS = ''
+TABLE_ID = ''
+SERVER_IP = ''
+PORT = 5000
 
-# MAX98357A Output Configuration (16kHz for clean pipeline sync)
-audio_out = I2S(1, 
-                sck=Pin(20), ws=Pin(21), sd=Pin(22), 
-                mode=I2S.TX, bits=16, format=I2S.MONO, 
-                rate=16000, ibuf=10000)
+def connect_wifi():
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    if not wlan.isconnected():
+        print('Connecting to network...')
+        wlan.connect(WIFI_SSID, WIFI_PASS)
+        while not wlan.isconnected():
+            time.sleep(1)
+    print('Network config:', wlan.ifconfig())
 
-# Synchronize base presence via HTTP API Layer
-try:
-    urequests.post(f"http://{SERVER_IP}:5000/register_table", json={"table_id": TABLE_ID}).close()
-except Exception:
-    pass
-
-print(f"[{TABLE_ID}] Live System Active. Tap once to START streaming, tap again to SEND.")
-
-def execute_live_stream():
-    # RELEASE GUARD: Wait for the user to lift their finger off the button first!
-    while touch_sensor.value() == 1:
-        time.sleep(0.05)
-    time.sleep(0.1) # Final debounce
-    
-    print("🔴 Live socket transmission established...")
-    
-    s = usocket.socket()
+def stream_audio(action="ORDER"):
     try:
-        s.connect((SERVER_IP, 5001))
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((SERVER_IP, PORT))
+        s.send(f"{TABLE_ID}|{action}|".encode('utf-8'))
+        time.sleep(2)
+        s.close()
     except Exception as e:
-        print("Connection failure to Stream Server Target:", e)
+        print("Socket error:", e)
+
+def main():
+    if not WIFI_SSID:
+        print("Awaiting configuration payload from Solaria...")
         return
         
-    # Standardize table allocation block footprint header to exactly 10 bytes
-    identity_header = (TABLE_ID + "          ")[:10]
-    s.send(identity_header.encode())
+    connect_wifi()
+    print(f"[{TABLE_ID}] Ready.")
     
-    # Process small audio slice footprints to bypass device internal RAM limits
-    audio_slice_buffer = bytearray(4000) 
+    button_pressed = False
     
     while True:
-        try:
-            audio_in.readinto(audio_slice_buffer)
-            s.send(audio_slice_buffer)
-        except OSError:
-            continue # Skip minor hardware pipeline glitches
+        if touch_sensor.value() == 1 and not button_pressed:
+            button_pressed = True
+            stream_audio("ORDER")
+            time.sleep(1)
+        elif touch_sensor.value() == 0:
+            button_pressed = False
             
-        # Monitor interface input line to trigger cessation commands
-        if touch_sensor.value() == 1:
-            print("⏹️ Termination trigger detected. Closing feed and awaiting processing output...")
-            break
-            
-    # Terminate the outbound write channel to signal the data compilation layer
-    s.shutdown(usocket.SHUT_WR)
-    
-    print("🔊 Initializing audio rendering pipeline...")
-    while True:
-        try:
-            response_chunk = s.recv(4096)
-            if not response_chunk:
-                break
-            audio_out.write(response_chunk)
-        except Exception:
-            break
-            
-    s.close()
-    print("✨ Transmission sequence finalized successfully.")
+        time.sleep(0.1)
 
-# --- PERSISTENT POLLING LOOP ---
-while True:
-    if touch_sensor.value() == 1:
-        execute_live_stream()
-        time.sleep(1.5)  # Global operational loop reset lockout protection
-    time.sleep(0.1)
+if __name__ == "__main__":
+    main()
