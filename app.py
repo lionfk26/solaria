@@ -576,18 +576,28 @@ def apply_theme(theme_idx):
 
 def draw_box(win, y, x, h, w, title=""):
     win.attron(curses.color_pair(PAIR_IDS["border"]))
-    win.hline(y, x, curses.ACS_HLINE, w)
-    win.hline(y + h - 1, x, curses.ACS_HLINE, w)
-    win.vline(y, x, curses.ACS_VLINE, h)
-    win.vline(y, x + w - 1, curses.ACS_VLINE, h)
-    win.addch(y, x, curses.ACS_ULCORNER)
-    win.addch(y, x + w - 1, curses.ACS_URCORNER)
-    win.addch(y + h - 1, x, curses.ACS_LLCORNER)
-    win.addch(y + h - 1, x + w - 1, curses.ACS_LRCORNER)
+    try:
+        win.hline(y, x, curses.ACS_HLINE, w)
+        win.hline(y + h - 1, x, curses.ACS_HLINE, w)
+        win.vline(y, x, curses.ACS_VLINE, h)
+        win.vline(y, x + w - 1, curses.ACS_VLINE, h)
+        win.addch(y, x, curses.ACS_ULCORNER)
+        win.addch(y, x + w - 1, curses.ACS_URCORNER)
+        win.addch(y + h - 1, x, curses.ACS_LLCORNER)
+        # Writing to the terminal's absolute bottom-right cell raises
+        # curses.error (ERR) because the cursor can't advance past it.
+        # insch() instead of addch() draws the char without moving the
+        # cursor afterwards, so it doesn't hit that edge case.
+        win.insch(y + h - 1, x + w - 1, curses.ACS_LRCORNER)
+    except curses.error:
+        pass
     win.attroff(curses.color_pair(PAIR_IDS["border"]))
     if title:
         win.attron(curses.color_pair(PAIR_IDS["accent"]) | curses.A_BOLD)
-        win.addstr(y, x + 2, f" {title} ")
+        try:
+            win.addstr(y, x + 2, f" {title} ")
+        except curses.error:
+            pass
         win.attroff(curses.color_pair(PAIR_IDS["accent"]) | curses.A_BOLD)
 
 
