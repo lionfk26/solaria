@@ -4,9 +4,10 @@ Solaria - Local AI Restaurant Ordering System
 Main server application.
 
 Runs three concurrent pieces of work:
-  1. Auto-flasher thread: watches for a Pico W in BOOTSEL mode mounted at
-     /media/fred/RPI-RP2 and flashes it with the table firmware, baking in
-     Wi-Fi credentials and a table ID.
+  1. Auto-flasher thread: watches for a Pico in BOOTSEL mode mounted anywhere
+     under /media/fred (RPI-RP2 for Pico W, RP2350 for Pico 2 W, etc.) and
+     flashes it with the table firmware, baking in Wi-Fi credentials and a
+     table ID.
   2. TCP audio engine thread: listens on port 5000 for table audio/control
      streams, runs offline STT/TTS, and manages a two-step order flow
      (proposal -> confirmation).
@@ -46,7 +47,12 @@ WIFI_SSID_PATH = os.path.join(BASE_DIR, "wifi_ssid.txt")
 WIFI_PASS_PATH = os.path.join(BASE_DIR, "wifi_pass.txt")
 VOSK_MODEL_DIR = os.path.join(BASE_DIR, "models", "vosk", "vosk-model-small-en-us-0.15")
 
-PICO_MOUNT_TARGET = "/media/fred/RPI-RP2"
+MEDIA_ROOT = "/media/fred"
+# Every RP2040 (Pico W, "RPI-RP2") and RP2350 (Pico 2 W, "RP2350") board
+# drops this file at the root of its BOOTSEL drive, regardless of the
+# volume label - so we watch for the file rather than a specific mount
+# name, which lets both board types get auto-flashed without special-casing.
+PICO_BOOTLOADER_MARKER = "INFO_UF2.TXT"
 
 AUDIO_PORT = 5000
 CONTROL_PORT = 5001
@@ -259,20 +265,41 @@ def flash_pico(mount_path, table_id):
     return True
 
 
+def find_pico_mount():
+    """
+    Look under MEDIA_ROOT for a mounted drive that has the Pico bootloader
+    marker file at its root. Returns the mount path, or None if no Pico is
+    currently connected in BOOTSEL mode.
+    """
+    if not os.path.isdir(MEDIA_ROOT):
+        return None
+    try:
+        entries = os.listdir(MEDIA_ROOT)
+    except OSError:
+        return None
+    for entry in entries:
+        candidate = os.path.join(MEDIA_ROOT, entry)
+        if not os.path.ismount(candidate):
+            continue
+        if os.path.isfile(os.path.join(candidate, PICO_BOOTLOADER_MARKER)):
+            return candidate
+    return None
+
+
 def auto_flasher_thread():
-    seen_mount = False
-    log_flash("Auto-flasher watching for Pico at " + PICO_MOUNT_TARGET)
+    seen_mount = None
+    log_flash(f"Auto-flasher watching {MEDIA_ROOT} for a Pico BOOTSEL drive...")
     while APP_STATE["running"]:
-        mounted = os.path.isdir(PICO_MOUNT_TARGET) and os.path.ismount(PICO_MOUNT_TARGET)
-        if mounted and not seen_mount:
-            seen_mount = True
+        mount_path = find_pico_mount()
+        if mount_path and mount_path != seen_mount:
+            seen_mount = mount_path
             table_id = next_table_id()
             try:
-                flash_pico(PICO_MOUNT_TARGET, table_id)
+                flash_pico(mount_path, table_id)
             except Exception as exc:  # noqa: BLE001 - keep the thread alive
                 log_flash(f"ERROR during flash: {exc}")
-        elif not mounted:
-            seen_mount = False
+        elif not mount_path:
+            seen_mount = None
         time.sleep(1.5)
 
 
